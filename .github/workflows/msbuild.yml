@@ -80,12 +80,12 @@ jobs:
         name: wireguard-binaries
         path: ./artifacts
 
-    - name: Code signing (optional)
-      if: ${{ secrets.SIGNING_CERT != '' }}
-      run: |
-        # 这里添加代码签名步骤
-        # 需要配置相应的签名证书和密码
-        echo "Code signing would happen here"
+    #- name: Code signing (optional)
+    #  if: ${{ secrets.SIGNING_CERT != '' }}
+    #  run: |
+    #   # 这里添加代码签名步骤
+    #    # 需要配置相应的签名证书和密码
+    #    echo "Code signing would happen here"
 
     - name: Publish to GitHub Releases
       uses: softprops/action-gh-release@v2
