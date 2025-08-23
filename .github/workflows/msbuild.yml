@@ -24,9 +24,9 @@ jobs:
     - name: Setup build environment
       run: |
         # 安装必要的构建工具
-        choco install -y nasm
-        choco install -y wixtoolset
-        choco install -y 7zip
+        choco install nasm -y
+        choco install wixtoolset -y
+        choco install 7zip -y
 
     - name: Set up Go
       uses: actions/setup-go@v5
