@@ -3,12 +3,13 @@ name: Build and Release WireGuard for Windows
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
+  pull_request:
   workflow_dispatch:
 
 env:
-  BUILD_CONFIGURATION: Release
-  BUILD_PLATFORM: x64
+  PLATFORM: x64
+  CONFIGURATION: Release
 
 jobs:
   build:
@@ -20,36 +21,89 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+    - name: Setup build environment
+      run: |
+        # 安装必要的构建工具
+        choco install -y nasm
+        choco install -y wixtoolset
+        choco install -y 7zip
 
-    - name: Setup NuGet
-      uses: NuGet/setup-nuget@v2
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
 
-    - name: Restore NuGet packages
-      run: nuget restore
+    - name: Set up Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
 
-    - name: Build WireGuard
-      run: msbuild /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:DeployOnBuild=true /p:PublishProfile=FolderProfile
+    - name: Display build environment
+      run: |
+        go version
+        rustc --version
+        nasm -v
+        heat -?
+
+    - name: Build using build.bat
+      run: |
+        .\build.bat
 
     - name: Run tests
-      run: msbuild /t:Test /p:Configuration=${{ env.BUILD_CONFIGURATION }}
-
-    - name: Create release artifacts
       run: |
-        $version = (Get-Item ".\amd64\Release\WireGuard.exe").VersionInfo.FileVersion
+        go test ./...
+
+    - name: Create release package
+      run: |
         mkdir artifacts
-        Compress-Archive -Path ".\amd64\Release\*" -DestinationPath "artifacts\WireGuard-$version.zip"
-        Compress-Archive -Path ".\x86\Release\*" -DestinationPath "artifacts\WireGuard-$version-x86.zip"
+        # 复制构建产物
+        Copy-Item ".\x64\Release\*.exe" -Destination ".\artifacts\" -ErrorAction SilentlyContinue
+        Copy-Item ".\x64\Release\*.dll" -Destination ".\artifacts\" -ErrorAction SilentlyContinue
+        Copy-Item ".\*.msi" -Destination ".\artifacts\" -ErrorAction SilentlyContinue
+        
+        # 如果有其他架构的构建，也包含进来
+        if (Test-Path ".\x86\Release") {
+            mkdir artifacts\x86
+            Copy-Item ".\x86\Release\*" -Destination ".\artifacts\x86\" -ErrorAction SilentlyContinue
+        }
+        
+        # 创建zip包
+        7z a wireguard-binaries.zip .\artifacts\*
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: wireguard-binaries
-        path: artifacts/*.zip
+        path: |
+          wireguard-binaries.zip
+          artifacts/*.msi
+          artifacts/*.exe
+          artifacts/*.dll
+
+  make-build:
+    runs-on: windows-latest
+    needs: build
+    if: ${{ always() }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup GNU Make
+      run: choco install -y make
+
+    - name: Build using Makefile
+      run: |
+        make --version
+        # 尝试使用Makefile构建（如果项目支持）
+        if (Test-Path "Makefile") {
+            make || echo "Make build failed, continuing with other methods"
+        }
 
   create-release:
-    needs: build
+    needs: [build, make-build]
     runs-on: windows-latest
     if: startsWith(github.ref, 'refs/tags/')
     
@@ -58,39 +112,55 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: wireguard-binaries
-        path: ./artifacts
+        path: ./downloaded-artifacts
 
-    - name: Create Release
+    - name: List downloaded files
+      run: Get-ChildItem -Recurse ./downloaded-artifacts
+
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./artifacts/*.zip
+        files: |
+          ./downloaded-artifacts/wireguard-binaries.zip
+          ./downloaded-artifacts/*.msi
+          ./downloaded-artifacts/*.exe
+          ./downloaded-artifacts/*.dll
         generate_release_notes: true
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  sign-and-publish:
-    needs: build
+  # 可选：添加矩阵构建以支持不同架构
+  matrix-build:
+    strategy:
+      matrix:
+        platform: [x64, x86]
+        configuration: [Release, Debug]
     runs-on: windows-latest
-    if: success() && startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
       with:
-        name: wireguard-binaries
-        path: ./artifacts
+        submodules: recursive
 
-    #- name: Code signing (optional)
-    #  if: ${{ secrets.SIGNING_CERT != '' }}
-    #  run: |
-    #   # 这里添加代码签名步骤
-    #    # 需要配置相应的签名证书和密码
-    #    echo "Code signing would happen here"
+    - name: Setup build tools
+      run: |
+        choco install -y nasm
+        choco install -y wixtoolset
 
-    - name: Publish to GitHub Releases
-      uses: softprops/action-gh-release@v2
+    - name: Build for ${{ matrix.platform }} (${{ matrix.configuration }})
+      run: |
+        # 设置平台和配置参数
+        $env:PLATFORM = "${{ matrix.platform }}"
+        $env:CONFIGURATION = "${{ matrix.configuration }}"
+        .\build.bat
+
+    - name: Upload ${{ matrix.platform }} ${{ matrix.configuration }} artifacts
+      uses: actions/upload-artifact@v4
       with:
-        files: ./artifacts/*.zip
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: wireguard-${{ matrix.platform }}-${{ matrix.configuration }}
+        path: |
+          ${{ matrix.platform }}/${{ matrix.configuration }}/*.exe
+          ${{ matrix.platform }}/${{ matrix.configuration }}/*.dll
