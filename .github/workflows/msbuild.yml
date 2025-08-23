@@ -35,13 +35,13 @@ jobs:
       - name: List built files
         run: |
           dir amd64
-          #dir x86
-          #dir arm64
+          dir x86
+          dir arm64
       
       
       - name: Create release (on tag push)
         id: create_release
-        if: startsWith(github.ref, 'refs/tags/')
+        #if: startsWith(github.ref, 'refs/tags/')
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,7 +52,7 @@ jobs:
           prerelease: false
 
       - name: Upload Release Assets (on tag push)
-        if: startsWith(github.ref, 'refs/tags/')
+        #if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -63,7 +63,7 @@ jobs:
           asset_content_type: application/octet-stream
       
       - name: Upload Release Assets (wg.exe)
-        if: startsWith(github.ref, 'refs/tags/')
+        #if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
