@@ -41,12 +41,12 @@ jobs:
       with:
         toolchain: stable
 
-    - name: Display build environment
-      run: |
-        go version
-        rustc --version
-        nasm -v
-        heat -?
+    #- name: Display build environment
+    #  run: |
+    #    go version
+    #    rustc --version
+    #    nasm -v
+    #    heat -?
 
     - name: Build using build.bat
       run: |
