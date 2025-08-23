@@ -1,49 +1,96 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-name: MSBuild
+name: Build and Release WireGuard for Windows
 
 on:
   push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+    tags:
+      - '*'
+  workflow_dispatch:
 
 env:
-  # Path to the solution file relative to the root of the project.
-  SOLUTION_FILE_PATH: .
-
-  # Configuration type to build.
-  # You can convert this to a build matrix if you need coverage of multiple configuration types.
-  # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
   BUILD_CONFIGURATION: Release
-
-permissions:
-  contents: read
+  BUILD_PLATFORM: x64
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
-
-    #- name: Add MSBuild to PATH
-    #  uses: microsoft/setup-msbuild@v1.0.2
-
-    #- name: Restore NuGet packages
-    #  working-directory: ${{env.GITHUB_WORKSPACE}}
-    #  run: nuget restore ${{env.SOLUTION_FILE_PATH}}
-
-    - name: Build
-      run: .\build.bat        
-      #working-directory: ${{env.GITHUB_WORKSPACE}}
-      # Add additional options to the MSBuild command line here (like platform or verbosity level).
-      # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
-      # run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
-    - uses: actions/upload-artifact@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
       with:
-        name: wireguard.exe
-        path: amd64\wireguard.exe
+        submodules: recursive
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
+
+    - name: Restore NuGet packages
+      run: nuget restore
+
+    - name: Build WireGuard
+      run: msbuild /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.BUILD_PLATFORM }} /p:DeployOnBuild=true /p:PublishProfile=FolderProfile
+
+    - name: Run tests
+      run: msbuild /t:Test /p:Configuration=${{ env.BUILD_CONFIGURATION }}
+
+    - name: Create release artifacts
+      run: |
+        $version = (Get-Item ".\amd64\Release\WireGuard.exe").VersionInfo.FileVersion
+        mkdir artifacts
+        Compress-Archive -Path ".\amd64\Release\*" -DestinationPath "artifacts\WireGuard-$version.zip"
+        Compress-Archive -Path ".\x86\Release\*" -DestinationPath "artifacts\WireGuard-$version-x86.zip"
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: wireguard-binaries
+        path: artifacts/*.zip
+
+  create-release:
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: wireguard-binaries
+        path: ./artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./artifacts/*.zip
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sign-and-publish:
+    needs: build
+    runs-on: windows-latest
+    if: success() && startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: wireguard-binaries
+        path: ./artifacts
+
+    - name: Code signing (optional)
+      if: ${{ secrets.SIGNING_CERT != '' }}
+      run: |
+        # 这里添加代码签名步骤
+        # 需要配置相应的签名证书和密码
+        echo "Code signing would happen here"
+
+    - name: Publish to GitHub Releases
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./artifacts/*.zip
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
