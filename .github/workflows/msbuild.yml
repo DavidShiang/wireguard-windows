@@ -24,9 +24,7 @@ jobs:
     - name: Install nasm
       run: choco install nasm -y
     
-    - name: Refresh environment for nasm
-      run: refreshenv
-    
+   
     - name: Install WiX Toolset and 7zip
       run: |
         choco install wixtoolset -y
