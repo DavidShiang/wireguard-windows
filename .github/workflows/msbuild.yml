@@ -8,12 +8,19 @@ on:
   workflow_dispatch:
 
 env:
-  PLATFORM: x64
-  CONFIGURATION: Release
+  NUMBER_OF_PROCESSORS: 4
+  GoGenerate: "yes"
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [amd64]  # 根据build.bat，目前只构建amd64，可以添加x86, arm64
+        include:
+          - arch: amd64
+            mingw_prefix: x86_64
+            goarch: amd64
 
     steps:
     - name: Checkout code
@@ -21,64 +28,109 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install nasm
-      run: choco install nasm -y
-    
-   
-    - name: Install WiX Toolset and 7zip
+    - name: Install build dependencies
       run: |
-        choco install wixtoolset -y
-        choco install 7zip -y
-        
+        choco install -y nasm
+        choco install -y wixtoolset
+        choco install -y curl
+        choco install -y tar
+        choco install -y make
 
-    - name: Set up Go
+    - name: Setup Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.20.14'
 
-    - name: Set up Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-
-    #- name: Display build environment
-    #  run: |
-    #    go version
-    #    rustc --version
-    #    nasm -v
-    #    heat -?
-
-    - name: Build using build.bat
+    - name: Run build.bat for ${{ matrix.arch }}
       run: |
+        # 设置环境变量以匹配build.bat的要求
+        $env:GOARCH = "${{ matrix.goarch }}"
         .\build.bat
 
-    #- name: Run tests
-    #  run: |
-    #    go test ./...
-
-    - name: Create release package
+    - name: Collect build artifacts
       run: |
         mkdir artifacts
         # 复制构建产物
-        Copy-Item ".\x64\Release\*.exe" -Destination ".\artifacts\" -ErrorAction SilentlyContinue
-        Copy-Item ".\x64\Release\*.dll" -Destination ".\artifacts\" -ErrorAction SilentlyContinue
-        Copy-Item ".\*.msi" -Destination ".\artifacts\" -ErrorAction SilentlyContinue
-        
-        # 如果有其他架构的构建，也包含进来
-        if (Test-Path ".\x86\Release") {
-            mkdir artifacts\x86
-            Copy-Item ".\x86\Release\*" -Destination ".\artifacts\x86\" -ErrorAction SilentlyContinue
+        if (Test-Path "${{ matrix.arch }}\wireguard.exe") {
+            Copy-Item "${{ matrix.arch }}\wireguard.exe" -Destination "artifacts\"
         }
-        
-        # 创建zip包
-        7z a wireguard-binaries.zip .\artifacts\*
+        if (Test-Path "${{ matrix.arch }}\wg.exe") {
+            Copy-Item "${{ matrix.arch }}\wg.exe" -Destination "artifacts\"
+        }
+        # 复制可能的其他文件
+        Copy-Item "*.msi" -Destination "artifacts\" -ErrorAction SilentlyContinue
+        Copy-Item "*.ico" -Destination "artifacts\" -ErrorAction SilentlyContinue
 
-    - name: Upload artifacts
+    - name: Upload artifacts for ${{ matrix.arch }}
       uses: actions/upload-artifact@v4
       with:
-        name: wireguard-binaries
-        path: |
-          wireguard-binaries.zip
-          artifacts/*.msi
-          artifacts/*.exe
-          artifacts/*.dll
+        name: wireguard-${{ matrix.arch }}
+        path: artifacts/*
+
+  generate-and-test:
+    runs-on: windows-latest
+    needs: [build-windows]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        choco install -y nasm
+        choco install -y curl
+        choco install -y tar
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.20.14'
+
+    - name: Run go generate
+      run: |
+        # 运行go generate（在build.bat中设置GoGenerate=yes时也会运行）
+        go generate ./...
+
+  create-release:
+    needs: [build-windows, generate-and-test]
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./all-artifacts
+
+    - name: Extract version from version.go
+      run: |
+        $version = (Get-Content .\version\version.go | Select-String 'Number\s*=\s*"([0-9.]+)"').Matches.Groups[1].Value
+        echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+    - name: Create release package
+      run: |
+        # 创建整理好的发布目录
+        mkdir release
+        mkdir release\$env:VERSION
+        
+        # 整理Windows构建产物
+        if (Test-Path "all-artifacts/wireguard-amd64") {
+            Copy-Item "all-artifacts/wireguard-amd64/*" -Destination "release/$env:VERSION/" -Force
+        }
+                
+        # 创建zip包
+        7z a "WireGuard-$env:VERSION.zip" "release/$env:VERSION/*"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: WireGuard-$env:VERSION.zip
+        tag_name: v${{ env.VERSION }}
+        name: WireGuard for Windows v${{ env.VERSION }}
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
