@@ -35,8 +35,8 @@ jobs:
       - name: List built files
         run: |
           dir amd64
-          dir x86
-          dir arm64
+          #dir x86
+          #dir arm64
       
       
       - name: Create release (on tag push)
