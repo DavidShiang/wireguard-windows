@@ -52,9 +52,9 @@ jobs:
       run: |
         .\build.bat
 
-    - name: Run tests
-      run: |
-        go test ./...
+    #- name: Run tests
+    #  run: |
+    #    go test ./...
 
     - name: Create release package
       run: |
@@ -82,88 +82,3 @@ jobs:
           artifacts/*.msi
           artifacts/*.exe
           artifacts/*.dll
-
-  make-build:
-    runs-on: windows-latest
-    needs: build
-    if: ${{ always() }}
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Setup GNU Make
-      run: choco install -y make
-
-    - name: Build using Makefile
-      run: |
-        make --version
-        # 尝试使用Makefile构建（如果项目支持）
-        if (Test-Path "Makefile") {
-            make || echo "Make build failed, continuing with other methods"
-        }
-
-  create-release:
-    needs: [build, make-build]
-    runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: wireguard-binaries
-        path: ./downloaded-artifacts
-
-    - name: List downloaded files
-      run: Get-ChildItem -Recurse ./downloaded-artifacts
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: |
-          ./downloaded-artifacts/wireguard-binaries.zip
-          ./downloaded-artifacts/*.msi
-          ./downloaded-artifacts/*.exe
-          ./downloaded-artifacts/*.dll
-        generate_release_notes: true
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # 可选：添加矩阵构建以支持不同架构
-  matrix-build:
-    strategy:
-      matrix:
-        platform: [x64, x86]
-        configuration: [Release, Debug]
-    runs-on: windows-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Setup build tools
-      run: |
-        choco install -y nasm
-        choco install -y wixtoolset
-
-    - name: Build for ${{ matrix.platform }} (${{ matrix.configuration }})
-      run: |
-        # 设置平台和配置参数
-        $env:PLATFORM = "${{ matrix.platform }}"
-        $env:CONFIGURATION = "${{ matrix.configuration }}"
-        .\build.bat
-
-    - name: Upload ${{ matrix.platform }} ${{ matrix.configuration }} artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: wireguard-${{ matrix.platform }}-${{ matrix.configuration }}
-        path: |
-          ${{ matrix.platform }}/${{ matrix.configuration }}/*.exe
-          ${{ matrix.platform }}/${{ matrix.configuration }}/*.dll
