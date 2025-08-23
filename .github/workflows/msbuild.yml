@@ -21,11 +21,14 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup build environment
+    - name: Install nasm
+      run: choco install nasm -y
+    
+    - name: Refresh environment for nasm
+      run: refreshenv
+    
+    - name: Install WiX Toolset and 7zip
       run: |
-        # 安装必要的构建工具
-        choco install nasm -y
-        refreshenv
         choco install wixtoolset -y
         choco install 7zip -y
         
