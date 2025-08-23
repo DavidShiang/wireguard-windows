@@ -1,136 +1,74 @@
-name: Build and Release WireGuard for Windows
+name: Build and Release WireGuard
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
-env:
-  NUMBER_OF_PROCESSORS: 4
-  GoGenerate: "yes"
-
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        arch: [amd64]  # 根据build.bat，目前只构建amd64，可以添加x86, arm64
-        include:
-          - arch: amd64
-            mingw_prefix: x86_64
-            goarch: amd64
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Install build dependencies
-      run: |
-        choco install -y nasm
-        choco install -y wixtoolset
-        choco install -y curl
-        choco install -y tar
-        choco install -y make
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20.14'
 
-    - name: Setup Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.20.14'
+      - name: Install Dependencies (Windows)
+        run: |
+          .\build.bat installdeps
+          
+      - name: Build All Architectures
+        run: |
+          .\build.bat build
+      
+      - name: List built files
+        run: |
+          dir amd64
+          #dir x86
+          #dir arm64
+      
+      
+      - name: Create release (on tag push)
+        id: create_release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
 
-    - name: Run build.bat for ${{ matrix.arch }}
-      run: |
-        # 设置环境变量以匹配build.bat的要求
-        $env:GOARCH = "${{ matrix.goarch }}"
-        .\build.bat
-
-    - name: Collect build artifacts
-      run: |
-        mkdir artifacts
-        # 复制构建产物
-        if (Test-Path "${{ matrix.arch }}\wireguard.exe") {
-            Copy-Item "${{ matrix.arch }}\wireguard.exe" -Destination "artifacts\"
-        }
-        if (Test-Path "${{ matrix.arch }}\wg.exe") {
-            Copy-Item "${{ matrix.arch }}\wg.exe" -Destination "artifacts\"
-        }
-        # 复制可能的其他文件
-        Copy-Item "*.msi" -Destination "artifacts\" -ErrorAction SilentlyContinue
-        Copy-Item "*.ico" -Destination "artifacts\" -ErrorAction SilentlyContinue
-
-    - name: Upload artifacts for ${{ matrix.arch }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: wireguard-${{ matrix.arch }}
-        path: artifacts/*
-
-  generate-and-test:
-    runs-on: windows-latest
-    needs: [build-windows]
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Install dependencies
-      run: |
-        choco install -y nasm
-        choco install -y curl
-        choco install -y tar
-
-    - name: Setup Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.20.14'
-
-    - name: Run go generate
-      run: |
-        # 运行go generate（在build.bat中设置GoGenerate=yes时也会运行）
-        go generate ./...
-
-  create-release:
-    needs: [build-windows, generate-and-test]
-    runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: ./all-artifacts
-
-    - name: Extract version from version.go
-      run: |
-        $version = (Get-Content .\version\version.go | Select-String 'Number\s*=\s*"([0-9.]+)"').Matches.Groups[1].Value
-        echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-    - name: Create release package
-      run: |
-        # 创建整理好的发布目录
-        mkdir release
-        mkdir release\$env:VERSION
-        
-        # 整理Windows构建产物
-        if (Test-Path "all-artifacts/wireguard-amd64") {
-            Copy-Item "all-artifacts/wireguard-amd64/*" -Destination "release/$env:VERSION/" -Force
-        }
-                
-        # 创建zip包
-        7z a "WireGuard-$env:VERSION.zip" "release/$env:VERSION/*"
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: WireGuard-$env:VERSION.zip
-        tag_name: v${{ env.VERSION }}
-        name: WireGuard for Windows v${{ env.VERSION }}
-        generate_release_notes: true
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Release Assets (on tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./amd64/wireguard.exe
+          asset_name: wireguard-amd64.exe
+          asset_content_type: application/octet-stream
+      
+      - name: Upload Release Assets (wg.exe)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./amd64/wg.exe
+          asset_name: wg-amd64.exe
+          asset_content_type: application/octet-stream
