@@ -25,9 +25,10 @@ jobs:
       run: |
         # 安装必要的构建工具
         choco install nasm -y
+        refreshenv
         choco install wixtoolset -y
         choco install 7zip -y
-        # refreshenv
+        
 
     - name: Set up Go
       uses: actions/setup-go@v5
