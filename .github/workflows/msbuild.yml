@@ -27,6 +27,7 @@ jobs:
         choco install nasm -y
         choco install wixtoolset -y
         choco install 7zip -y
+        refreshenv
 
     - name: Set up Go
       uses: actions/setup-go@v5
