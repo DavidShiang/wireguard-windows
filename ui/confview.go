@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"fmt"
+	"log"
 
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
@@ -17,7 +17,6 @@ import (
 	"golang.zx2c4.com/wireguard/windows/conf"
 	"golang.zx2c4.com/wireguard/windows/l18n"
 	"golang.zx2c4.com/wireguard/windows/manager"
-	"golang.zx2c4.com/wireguard/windows/ringlogger"
 )
 
 type widgetsLine interface {
