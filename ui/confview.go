@@ -762,9 +762,6 @@ func (cv *ConfView) startHandshakeMonitor() {
                         // 重新连接
                         //  cv.interfaze.toggleActive.button.Clicked().Fire()
 						ringlogger.Global.Write([]byte("正在重新连接WireGuard通道\n"))
-						if cv.logPage != nil {
-                           cv.logPage.Refresh()
-                        }
 						cv.onToggleActiveClicked() // 再次调用以重连
                     }
                 }
