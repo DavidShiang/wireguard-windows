@@ -742,7 +742,8 @@ func (cv *ConfView) startHandshakeMonitor() {
                 for _, pv := range cv.peers {
                     hsText := pv.latestHandshake.text.Text()
                     elapsed := parseHandshakeElapsed(hsText)
-					ringlogger.Global.Write([]byte("elapsed：%s\n",elapsed))
+					//ringlogger.Global.Write([]byte("elapsed：%s\n",elapsed))
+					ringlogger.Global.Write([]byte(fmt.Sprintf("elapsed：%s\n", elapsed)))
                     if elapsed > maxElapsed {
                         maxElapsed = elapsed
                     }
@@ -771,7 +772,7 @@ func (cv *ConfView) startHandshakeMonitor() {
 // 辅助函数，将“上次握手”文本转为持续时间
 func parseHandshakeElapsed(text string) time.Duration {
     // 例如 text = "3 minutes ago"
-	ringlogger.Global.Write([]byte("%s\n",text))
+	ringlogger.Global.Write([]byte(fmt.Sprintf("%s\n",text)))
     if strings.Contains(text, "second") {
         return 10 * time.Second // 约等
     }
