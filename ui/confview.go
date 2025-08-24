@@ -745,6 +745,9 @@ func (cv *ConfView) startHandshakeMonitor() {
                     elapsed := parseHandshakeElapsed(hsText)
 					//ringlogger.Global.Write([]byte("elapsed：%s\n",elapsed))
 					ringlogger.Global.Write([]byte(fmt.Sprintf("elapsed：%s\n", elapsed)))
+					if cv.logPage != nil {
+                        cv.logPage.Refresh()
+                    }
                     if elapsed > maxElapsed {
                         maxElapsed = elapsed
                     }
@@ -762,6 +765,9 @@ func (cv *ConfView) startHandshakeMonitor() {
                         // 重新连接
                         //  cv.interfaze.toggleActive.button.Clicked().Fire()
 						ringlogger.Global.Write([]byte("正在重新连接WireGuard通道\n"))
+						if cv.logPage != nil {
+                           cv.logPage.Refresh()
+                        }
 						cv.onToggleActiveClicked() // 再次调用以重连
                     }
                 }
@@ -774,6 +780,9 @@ func (cv *ConfView) startHandshakeMonitor() {
 func parseHandshakeElapsed(text string) time.Duration {
     // 例如 text = "3 minutes ago"
 	ringlogger.Global.Write([]byte(fmt.Sprintf("%s\n",text)))
+	if cv.logPage != nil {
+        cv.logPage.Refresh()
+    }
     if strings.Contains(text, "second") {
         return 10 * time.Second // 约等
     }
