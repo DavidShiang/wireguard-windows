@@ -748,12 +748,15 @@ func (cv *ConfView) startHandshakeMonitor() {
                 if maxElapsed > 5*time.Minute {
                     // 断开
                     if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
-                        cv.interfaze.toggleActive.button.Clicked().Detach(nil) // 防止递归
-                        cv.interfaze.toggleActive.button.Clicked().Attach(func() {})
+                        // cv.interfaze.toggleActive.button.Clicked().Detach(nil) // 防止递归
+						cv.interfaze.toggleActive.button.SetEnabled(true)
+						cv.onToggleActiveClicked() // 直接调用点击事件
+                        //cv.interfaze.toggleActive.button.Clicked().Attach(func() {})
                         cv.interfaze.toggleActive.button.Clicked().Fire()
                         time.Sleep(2 * time.Second)
                         // 重新连接
-                        cv.interfaze.toggleActive.button.Clicked().Fire()
+                        //  cv.interfaze.toggleActive.button.Clicked().Fire()
+						cv.onToggleActiveClicked() // 再次调用以重连
                     }
                 }
             })
