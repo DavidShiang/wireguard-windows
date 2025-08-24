@@ -774,16 +774,22 @@ func (cv *ConfView) startHandshakeMonitor() {
 func parseHandshakeElapsed(text string) time.Duration {
     // 例如 text = "3 minutes ago"
     ringlogger.Global.Write([]byte(fmt.Sprintf("text：%s\n", text)))
-	if strings.Contains(text, "second") {
+	if text == "" || strings.Contains(text, "never") {
+        return 0
+    }
+	if strings.Contains(text, "second") || strings.Contains(text, "秒") {
         return 10 * time.Second // 约等
     }
-    if strings.Contains(text, "minute") {
+    if strings.Contains(text, "minute") || strings.Contains(text, "分钟"){
         n, _ := strconv.Atoi(strings.Fields(text)[0])
         return time.Duration(n) * time.Minute
     }
-    if strings.Contains(text, "hour") {
+    if strings.Contains(text, "hour") || strings.Contains(text, "小时") {
         n, _ := strconv.Atoi(strings.Fields(text)[0])
         return time.Duration(n) * time.Hour
     }
-    return 100 * time.Hour // 默认极大
+	if strings.Contains(text, "just now") || strings.Contains(text, "now") {
+        return 1 * time.Second
+    }
+    return 0 //默认不超时
 }
