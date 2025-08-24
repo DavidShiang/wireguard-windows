@@ -569,7 +569,10 @@ func NewConfView(parent walk.Container) (*ConfView, error) {
 			}
 		}
 	}()
-
+	
+    // 20250824
+	// 增加超时监控
+	cv.startHandshakeMonitor()
 	disposables.Spare()
 
 	return cv, nil
@@ -722,4 +725,55 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 		groupBox.Parent().Children().Remove(groupBox)
 		groupBox.Dispose()
 	}
+}
+// 20252824
+// 增加超时重新连接的时间监控
+func (cv *ConfView) startHandshakeMonitor() {
+    go func() {
+        for {
+            time.Sleep(1 * time.Minute)
+            cv.Synchronize(func() {
+                if cv.tunnel == nil {
+                    return
+                }
+                // 遍历所有 peer，查找最大 last handshake
+                maxElapsed := time.Duration(0)
+                for _, pv := range cv.peers {
+                    hsText := pv.latestHandshake.text.Text()
+                    elapsed := parseHandshakeElapsed(hsText)
+                    if elapsed > maxElapsed {
+                        maxElapsed = elapsed
+                    }
+                }
+                if maxElapsed > 5*time.Minute {
+                    // 断开
+                    if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
+                        cv.interfaze.toggleActive.button.Clicked().Detach(nil) // 防止递归
+                        cv.interfaze.toggleActive.button.Clicked().Attach(func() {})
+                        cv.interfaze.toggleActive.button.Clicked().Fire()
+                        time.Sleep(2 * time.Second)
+                        // 重新连接
+                        cv.interfaze.toggleActive.button.Clicked().Fire()
+                    }
+                }
+            })
+        }
+    }()
+}
+
+// 辅助函数，将“上次握手”文本转为持续时间
+func parseHandshakeElapsed(text string) time.Duration {
+    // 例如 text = "3 minutes ago"
+    if strings.Contains(text, "second") {
+        return 10 * time.Second // 约等
+    }
+    if strings.Contains(text, "minute") {
+        n, _ := strconv.Atoi(strings.Fields(text)[0])
+        return time.Duration(n) * time.Minute
+    }
+    if strings.Contains(text, "hour") {
+        n, _ := strconv.Atoi(strings.Fields(text)[0])
+        return time.Duration(n) * time.Hour
+    }
+    return 100 * time.Hour // 默认极大
 }
