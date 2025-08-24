@@ -744,7 +744,7 @@ func (cv *ConfView) startHandshakeMonitor() {
                     hsText := pv.latestHandshake.text.Text()
                     elapsed := parseHandshakeElapsed(hsText)
 					//ringlogger.Global.Write([]byte("elapsed：%s\n",elapsed))
-					fmt.Sprintf("elapsed：%s\n", elapsed)
+					log.Printf("elapsed：%s\n", elapsed)
                     if elapsed > maxElapsed {
                         maxElapsed = elapsed
                     }
@@ -753,7 +753,7 @@ func (cv *ConfView) startHandshakeMonitor() {
                     // 断开
                     if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
                         // cv.interfaze.toggleActive.button.Clicked().Detach(nil) // 防止递归
-						ringlogger.Global.Write([]byte("超过5分钟未握手，准备断开WireGuard通道\n"))
+						log.Println"超过5分钟未握手，准备断开WireGuard通道\n"))
 						cv.interfaze.toggleActive.button.SetEnabled(true)
 						cv.onToggleActiveClicked() // 直接调用点击事件
                         //cv.interfaze.toggleActive.button.Clicked().Attach(func() {})
@@ -761,7 +761,7 @@ func (cv *ConfView) startHandshakeMonitor() {
                         time.Sleep(2 * time.Second)
                         // 重新连接
                         //  cv.interfaze.toggleActive.button.Clicked().Fire()
-						ringlogger.Global.Write([]byte("正在重新连接WireGuard通道\n"))
+						log.Println("正在重新连接WireGuard通道\n"))
 						cv.onToggleActiveClicked() // 再次调用以重连
                     }
                 }
@@ -773,7 +773,7 @@ func (cv *ConfView) startHandshakeMonitor() {
 // 辅助函数，将“上次握手”文本转为持续时间
 func parseHandshakeElapsed(text string) time.Duration {
     // 例如 text = "3 minutes ago"
-	fmt.Sprintf("%s\n",text)
+	log.Printf("%s\n",text)
     if strings.Contains(text, "second") {
         return 10 * time.Second // 约等
     }
