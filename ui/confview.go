@@ -17,7 +17,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/conf"
 	"golang.zx2c4.com/wireguard/windows/l18n"
 	"golang.zx2c4.com/wireguard/windows/manager"
-	//"golang.zx2c4.com/wireguard/windows/ringlogger"
+	"golang.zx2c4.com/wireguard/windows/ringlogger"
 )
 
 type widgetsLine interface {
@@ -731,6 +731,20 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 // 20252824
 // 增加超时重新连接的时间监控
 func (cv *ConfView) startHandshakeMonitor() {
+	var logFile string
+	logFile, err = conf.LogFile(true)
+	if err != nil {
+		serviceError = services.ErrorRingloggerOpen
+		return
+	}
+	err = ringlogger.InitGlobalLogger(logFile, "CON")
+	if err != nil {
+		serviceError = services.ErrorRingloggerOpen
+		return
+	}
+
+	services.PrintStarting()
+
     go func() {
         for {
             time.Sleep(1 * time.Minute)
@@ -743,10 +757,12 @@ func (cv *ConfView) startHandshakeMonitor() {
                 for _, pv := range cv.peers {
                     hsText := pv.latestHandshake.text.Text()
                     elapsed := parseHandshakeElapsed(hsText)
+					log.Printf("maxElapsed:%s",elapsed)
                     if elapsed > maxElapsed {
                         maxElapsed = elapsed
                     }
                 }
+				log.Printf("maxElapsed:%s",maxElapsed)
                 if maxElapsed > 1*time.Minute {
                     // 断开
                     if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
