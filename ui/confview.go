@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/l18n"
 	"golang.zx2c4.com/wireguard/windows/manager"
 	"golang.zx2c4.com/wireguard/windows/ringlogger"
+	"golang.zx2c4.com/wireguard/windows/services"
 )
 
 type widgetsLine interface {
@@ -732,6 +733,8 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 // 增加超时重新连接的时间监控
 func (cv *ConfView) startHandshakeMonitor() {
 	var logFile string
+	var err error
+	serviceError := services.ErrorSuccess
 	logFile, err = conf.LogFile(true)
 	if err != nil {
 		serviceError = services.ErrorRingloggerOpen
