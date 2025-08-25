@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"log"
 	//"fmt"
 
 	"github.com/lxn/walk"
@@ -735,6 +736,9 @@ func (cv *ConfView) startHandshakeMonitor() {
 	var logFile string
 	var err error
 	serviceError := services.ErrorSuccess
+	if serviceError != services.ErrorSuccess {
+		log.Printf("Service error occurred: %v", serviceError)
+	}
 	logFile, err = conf.LogFile(true)
 	if err != nil {
 		serviceError = services.ErrorRingloggerOpen
