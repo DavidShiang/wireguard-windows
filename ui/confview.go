@@ -747,7 +747,7 @@ func (cv *ConfView) startHandshakeMonitor() {
                         maxElapsed = elapsed
                     }
                 }
-                if maxElapsed > 3*time.Minute {
+                if maxElapsed > 2*time.Minute {
                     // 断开
                     if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
 						cv.interfaze.toggleActive.button.SetEnabled(true)
