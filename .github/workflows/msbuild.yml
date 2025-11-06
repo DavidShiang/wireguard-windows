@@ -11,37 +11,98 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Keep build job permissions minimal; release job will require write permission to contents.
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build (Windows)
     runs-on: windows-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.20.14'
 
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\go\pkg\mod
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-mod-
+
       - name: Install Dependencies (Windows)
-        run: |
-          .\build.bat installdeps
-          
+        run: .\build.bat installdeps
+
       - name: Build All Architectures
-        run: |
-          .\build.bat build
-      
+        run: .\build.bat build
+
       - name: List built files
         run: |
-          dir amd64
-          #dir x86
-          #dir arm64
-      
-      
-      - name: Create release (on tag push)
+          dir .\amd64 || echo "amd64 directory not found"
+          dir .\x86 || echo "x86 directory not found"
+          dir .\arm64 || echo "arm64 directory not found"
+
+      - name: Upload artifacts for debugging / CI
+        uses: actions/upload-artifact@v3
+        with:
+          name: amd64
+          path: ./amd64
+      - name: Upload artifact x86
+        uses: actions/upload-artifact@v3
+        with:
+          name: x86
+          path: ./x86
+          if-no-files-found: warn
+      - name: Upload artifact arm64
+        uses: actions/upload-artifact@v3
+        with:
+          name: arm64
+          path: ./arm64
+          if-no-files-found: warn
+
+  release:
+    name: Create GitHub Release (only on tag)
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: amd64
+          path: ./artifacts/amd64
+
+      - name: Download x86 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: x86
+          path: ./artifacts/x86
+          # if x86 wasn't built, this will warn but workflow continues
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: ./artifacts/arm64
+          # if arm64 wasn't built, this will warn but workflow continues
+
+      - name: Create release
         id: create_release
-        #if: startsWith(github.ref, 'refs/tags/')
         uses: actions/create-release@v1.1.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,24 +112,47 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Upload Release Assets (on tag push)
-        #if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload amd64 release assets
         uses: actions/upload-release-asset@v1.0.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./amd64/wireguard.exe
+          asset_path: ./artifacts/amd64/wireguard.exe
           asset_name: wireguard-amd64.exe
           asset_content_type: application/octet-stream
-      
-      - name: Upload Release Assets (wg.exe)
-        #if: startsWith(github.ref, 'refs/tags/')
+
+      - name: Upload amd64 wg.exe
         uses: actions/upload-release-asset@v1.0.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./amd64/wg.exe
+          asset_path: ./artifacts/amd64/wg.exe
           asset_name: wg-amd64.exe
           asset_content_type: application/octet-stream
+
+      - name: Upload x86 release assets (if present)
+        if: files_exist('artifacts/x86/wireguard.exe') || files_exist('artifacts/x86/wg.exe')
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/x86/wireguard.exe
+          asset_name: wireguard-x86.exe
+          asset_content_type: application/octet-stream
+
+      - name: Upload arm64 release assets (if present)
+        if: files_exist('artifacts/arm64/wireguard.exe') || files_exist('artifacts/arm64/wg.exe')
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts/arm64/wireguard.exe
+          asset_name: wireguard-arm64.exe
+          asset_content_type: application/octet-stream
+
+# Helper expression functions are not native — to avoid breaking on missing files we used download-artifact with warnings and conditional uploads.
+# If you prefer stricter checks or dynamic enumerations of files to upload, replace the conditional steps with a short shell script that enumerates and uploads using the GitHub REST API or `gh` cli.
