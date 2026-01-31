@@ -51,8 +51,7 @@ jobs:
       - name: List built files
         run: |
           dir .\amd64 || echo "amd64 directory not found"
-          dir .\arm64 || echo "arm64 directory not found"
-
+          
       - name: Upload artifacts for debugging / CI
         uses: actions/upload-artifact@v4
         with:
@@ -73,18 +72,6 @@ jobs:
         with:
           name: amd64
           path: ./artifacts/amd64
-
-      # --- New explicit existence checks (use GITHUB_OUTPUT) ---
- 
-      - name: Check arm64 artifacts
-        id: check_arm64
-        run: |
-          if [ -f artifacts/arm64/wireguard.exe ] || [ -f artifacts/arm64/wg.exe ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-      # --------------------------------------------------------
 
       - name: Create release
         id: create_release
@@ -117,16 +104,6 @@ jobs:
           asset_name: wg-amd64.exe
           asset_content_type: application/octet-stream
 
-      - name: Upload arm64 release assets (if present)
-        if: steps.check_arm64.outputs.exists == 'true'
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/arm64/wireguard.exe
-          asset_name: wireguard-arm64.exe
-          asset_content_type: application/octet-stream
-
+ 
 # Helper expression functions are not native — to avoid breaking on missing files we used download-artifact with warnings and conditional uploads.
 # If you prefer stricter checks or dynamic enumerations of files to upload, replace the conditional steps with a short shell script that enumerates and uploads using the GitHub REST API or `gh` cli.
