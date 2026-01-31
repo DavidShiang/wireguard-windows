@@ -6,10 +6,13 @@
 package ui
 
 import (
+	"log"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
-	"log"
+
 	//"fmt"
 
 	"github.com/lxn/walk"
@@ -79,6 +82,9 @@ type ConfView struct {
 	tunnelChangedCB *manager.TunnelChangeCallback
 	tunnel          *manager.Tunnel
 	updateTicker    *time.Ticker
+	// handshake monitor control
+	stopHandshakeMonitor      chan struct{}
+	handshakeToggleInProgress int32
 }
 
 func (lsl *labelStatusLine) widgets() (walk.Widget, walk.Widget) {
@@ -573,8 +579,8 @@ func NewConfView(parent walk.Container) (*ConfView, error) {
 			}
 		}
 	}()
-	
-    // 20250824
+
+	// 20250824
 	// 增加超时监控
 	cv.startHandshakeMonitor()
 	disposables.Spare()
@@ -590,6 +596,11 @@ func (cv *ConfView) Dispose() {
 	if cv.updateTicker != nil {
 		cv.updateTicker.Stop()
 		cv.updateTicker = nil
+	}
+	// stop handshake monitor goroutine
+	if cv.stopHandshakeMonitor != nil {
+		close(cv.stopHandshakeMonitor)
+		cv.stopHandshakeMonitor = nil
 	}
 	cv.ScrollView.Dispose()
 }
@@ -730,80 +741,192 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 		groupBox.Dispose()
 	}
 }
+
 // 20252824
 // 增加超时重新连接的时间监控
 func (cv *ConfView) startHandshakeMonitor() {
 	var logFile string
 	var err error
-	serviceError := services.ErrorSuccess
-	if serviceError != services.ErrorSuccess {
-		log.Printf("Service error occurred: %v", serviceError)
-	}
 	logFile, err = conf.LogFile(true)
 	if err != nil {
-		serviceError = services.ErrorRingloggerOpen
 		return
 	}
-	err = ringlogger.InitGlobalLogger(logFile, "CON")
-	if err != nil {
-		serviceError = services.ErrorRingloggerOpen
+	if err = ringlogger.InitGlobalLogger(logFile, "CON"); err != nil {
 		return
 	}
 
 	services.PrintStarting()
 
-    go func() {
-        for {
-            time.Sleep(1 * time.Minute)
-            cv.Synchronize(func() {
-                if cv.tunnel == nil {
-                    return
-                }
-                // 遍历所有 peer，查找最大 last handshake
-                maxElapsed := time.Duration(0)
-                for _, pv := range cv.peers {
-                    hsText := pv.latestHandshake.text.Text()
-                    elapsed := parseHandshakeElapsed(hsText)
-					log.Printf("maxElapsed:%s",elapsed)
-                    if elapsed > maxElapsed {
-                        maxElapsed = elapsed
-                    }
-                }
-				log.Printf("maxElapsed:%s",maxElapsed)
-                if maxElapsed > 1*time.Minute {
-                    // 断开
-                    if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
-						cv.interfaze.toggleActive.button.SetEnabled(true)
-						cv.onToggleActiveClicked() // 直接调用点击事件
-                        time.Sleep(2 * time.Second)
-                        // 重新连接
-  						cv.onToggleActiveClicked() // 再次调用以重连
-                    }
-                }
-            })
-        }
-    }()
+	// create stop channel
+	cv.stopHandshakeMonitor = make(chan struct{})
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				var shouldReconnect bool
+				// read UI state on UI thread
+				cv.Synchronize(func() {
+					if cv.tunnel == nil {
+						return
+					}
+					// 遍历所有 peer，查找最大 last handshake
+					maxElapsed := time.Duration(0)
+					for _, pv := range cv.peers {
+						hsText := pv.latestHandshake.text.Text()
+						elapsed := parseHandshakeElapsed(hsText)
+						log.Printf("peer elapsed:%s", elapsed)
+						if elapsed > maxElapsed {
+							maxElapsed = elapsed
+						}
+					}
+					log.Printf("maxElapsed:%s", maxElapsed)
+					shouldReconnect = maxElapsed > 1*time.Minute
+				})
+
+				if shouldReconnect {
+					// avoid concurrent reconnect attempts
+					if !atomic.CompareAndSwapInt32(&cv.handshakeToggleInProgress, 0, 1) {
+						continue
+					}
+					go func() {
+						defer atomic.StoreInt32(&cv.handshakeToggleInProgress, 0)
+						if cv.tunnel == nil {
+							return
+						}
+						// If tunnel started, stop it first
+						state, _ := cv.tunnel.State()
+						if state == manager.TunnelStarted {
+							cv.Synchronize(func() {
+								if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
+									cv.interfaze.toggleActive.button.SetEnabled(true)
+								}
+							})
+							_, err := cv.tunnel.Toggle()
+							if err != nil {
+								cv.Synchronize(func() {
+									showErrorCustom(cv.Form(), l18n.Sprintf("Failed to deactivate tunnel"), err.Error())
+								})
+								return
+							}
+							// wait for stop with timeout
+							done := make(chan error, 1)
+							go func() { done <- cv.tunnel.WaitForStop() }()
+							select {
+							case err := <-done:
+								if err != nil {
+									cv.Synchronize(func() {
+										showErrorCustom(cv.Form(), l18n.Sprintf("Failed waiting for tunnel to stop"), err.Error())
+									})
+									return
+								}
+							case <-time.After(30 * time.Second):
+								cv.Synchronize(func() {
+									showErrorCustom(cv.Form(), l18n.Sprintf("Timeout waiting for tunnel to stop"), "")
+								})
+								return
+							}
+						}
+						// start again
+						_, err := cv.tunnel.Toggle()
+						if err != nil {
+							cv.Synchronize(func() {
+								showErrorCustom(cv.Form(), l18n.Sprintf("Failed to activate tunnel"), err.Error())
+							})
+							return
+						}
+						// wait until started or timeout
+						startTimeout := time.After(30 * time.Second)
+						for {
+							state, _ := cv.tunnel.State()
+							if state == manager.TunnelStarted {
+								break
+							}
+							select {
+							case <-startTimeout:
+								cv.Synchronize(func() {
+									showErrorCustom(cv.Form(), l18n.Sprintf("Timeout waiting for tunnel to start"), "")
+								})
+								return
+							default:
+								time.Sleep(500 * time.Millisecond)
+							}
+						}
+					}()
+				}
+			case <-cv.stopHandshakeMonitor:
+				return
+			}
+		}
+	}()
 }
 
 // 辅助函数，将“上次握手”文本转为持续时间
 func parseHandshakeElapsed(text string) time.Duration {
-    // 例如 text = "3 minutes ago"
-    if text == "" || strings.Contains(text, "never") {
+	if text == "" {
 		return 0
 	}
-	if strings.Contains(text, "just now") || strings.Contains(text, "now") {
+	lt := strings.ToLower(text)
+	if strings.Contains(lt, "never") {
+		return 0
+	}
+	if strings.Contains(lt, "just now") || strings.Contains(lt, "now") {
 		return 1 * time.Second
 	}
-	if strings.Contains(text, "hour") || strings.Contains(text, "小时") {
-		n, _ := strconv.Atoi(strings.Fields(text)[0])
-		return time.Duration(n) * time.Hour
+	// Try regex to extract a number + unit (english)
+	re := regexp.MustCompile(`(?i)(\d+)\s*(year|day|hour|minute|second)`)
+	if m := re.FindStringSubmatch(lt); len(m) >= 3 {
+		n, _ := strconv.Atoi(m[1])
+		switch strings.ToLower(m[2]) {
+		case "year":
+			return time.Duration(n) * 365 * 24 * time.Hour
+		case "day":
+			return time.Duration(n) * 24 * time.Hour
+		case "hour":
+			return time.Duration(n) * time.Hour
+		case "minute":
+			return time.Duration(n) * time.Minute
+		case "second":
+			return time.Duration(n) * time.Second
+		}
 	}
-	if strings.Contains(text, "minute") || strings.Contains(text, "分钟") {
-		n, _ := strconv.Atoi(strings.Fields(text)[0])
-		return time.Duration(n) * time.Minute
+	// handle "a minute" / "an hour"
+	re2 := regexp.MustCompile(`(?i)\b(a|an)\s*(hour|minute|second)\b`)
+	if m := re2.FindStringSubmatch(lt); len(m) >= 3 {
+		switch strings.ToLower(m[2]) {
+		case "hour":
+			return 1 * time.Hour
+		case "minute":
+			return 1 * time.Minute
+		case "second":
+			return 10 * time.Second
+		}
 	}
-	if strings.Contains(text, "second") || strings.Contains(text, "秒") {
-		return 10 * time.Second // 约等
+	// Chinese quick handling
+	if strings.Contains(lt, "小时") {
+		// try extract leading number
+		f := strings.FieldsFunc(lt, func(r rune) bool { return r < '0' || r > '9' })
+		if len(f) > 0 {
+			n, _ := strconv.Atoi(f[0])
+			if n > 0 {
+				return time.Duration(n) * time.Hour
+			}
+		}
+		return 1 * time.Hour
+	}
+	if strings.Contains(lt, "分钟") {
+		f := strings.FieldsFunc(lt, func(r rune) bool { return r < '0' || r > '9' })
+		if len(f) > 0 {
+			n, _ := strconv.Atoi(f[0])
+			if n > 0 {
+				return time.Duration(n) * time.Minute
+			}
+		}
+		return 1 * time.Minute
+	}
+	if strings.Contains(lt, "秒") {
+		return 10 * time.Second
 	}
 
 	return 0 //默认不超时
