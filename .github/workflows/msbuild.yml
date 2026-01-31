@@ -55,18 +55,18 @@ jobs:
           dir .\arm64 || echo "arm64 directory not found"
 
       - name: Upload artifacts for debugging / CI
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: amd64
           path: ./amd64
       - name: Upload artifact x86
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: x86
           path: ./x86
           if-no-files-found: warn
       - name: Upload artifact arm64
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: arm64
           path: ./arm64
