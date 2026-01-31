@@ -51,7 +51,6 @@ jobs:
       - name: List built files
         run: |
           dir .\amd64 || echo "amd64 directory not found"
-          dir .\x86 || echo "x86 directory not found"
           dir .\arm64 || echo "arm64 directory not found"
 
       - name: Upload artifacts for debugging / CI
@@ -59,12 +58,7 @@ jobs:
         with:
           name: amd64
           path: ./amd64
-      - name: Upload artifact x86
-        uses: actions/upload-artifact@v4
-        with:
-          name: x86
-          path: ./x86
-          if-no-files-found: warn
+ 
       - name: Upload artifact arm64
         uses: actions/upload-artifact@v4
         with:
@@ -87,13 +81,6 @@ jobs:
           name: amd64
           path: ./artifacts/amd64
 
-      - name: Download x86 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: x86
-          path: ./artifacts/x86
-          # if x86 wasn't built, this will warn but workflow continues
-
       - name: Download arm64 artifact
         uses: actions/download-artifact@v4
         with:
@@ -102,15 +89,7 @@ jobs:
           # if arm64 wasn't built, this will warn but workflow continues
 
       # --- New explicit existence checks (use GITHUB_OUTPUT) ---
-      - name: Check x86 artifacts
-        id: check_x86
-        run: |
-          if [ -f artifacts/x86/wireguard.exe ] || [ -f artifacts/x86/wg.exe ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
+ 
       - name: Check arm64 artifacts
         id: check_arm64
         run: |
@@ -150,17 +129,6 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./artifacts/amd64/wg.exe
           asset_name: wg-amd64.exe
-          asset_content_type: application/octet-stream
-
-      - name: Upload x86 release assets (if present)
-        if: steps.check_x86.outputs.exists == 'true'
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/x86/wireguard.exe
-          asset_name: wireguard-x86.exe
           asset_content_type: application/octet-stream
 
       - name: Upload arm64 release assets (if present)
