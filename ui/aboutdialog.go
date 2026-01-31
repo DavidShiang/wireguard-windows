@@ -100,7 +100,7 @@ func runAboutDialog(owner walk.Form) error {
 	detailsLbl.SetTextAlignment(walk.AlignHCenterVNear)
 	// 20250825
 	// 修改标记
-	detailsLbl.SetText(l18n.Sprintf("App version: %s\nDriver version: %s\nGo version: %s\nOperating system: %s\nArchitecture: %s\nREV:david.xcm@gmail.com\n1 Minute", version.Number, driver.Version(), strings.TrimPrefix(runtime.Version(), "go"), version.OsName(), version.Arch()))
+	detailsLbl.SetText(l18n.Sprintf("App version: %sA\nDriver version: %s\nGo version: %s\nOperating system: %s\nArchitecture: %s\nREV:david.xcm@gmail.com\n1 Minute", version.Number, driver.Version(), strings.TrimPrefix(runtime.Version(), "go"), version.OsName(), version.Arch()))
 
 	copyrightLbl, err := walk.NewTextLabel(showingAboutDialog)
 	if err != nil {

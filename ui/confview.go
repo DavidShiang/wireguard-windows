@@ -775,7 +775,9 @@ func (cv *ConfView) startHandshakeMonitor() {
 					maxElapsed := time.Duration(0)
 					for _, pv := range cv.peers {
 						hsText := pv.latestHandshake.text.Text()
+						log.Printf("hsText:%s", hsText)
 						elapsed := parseHandshakeElapsed(hsText)
+						log.Printf("elapsed:%s", elapsed)
 						log.Printf("peer elapsed:%s", elapsed)
 						if elapsed > maxElapsed {
 							maxElapsed = elapsed
