@@ -59,13 +59,6 @@ jobs:
           name: amd64
           path: ./amd64
  
-      - name: Upload artifact arm64
-        uses: actions/upload-artifact@v4
-        with:
-          name: arm64
-          path: ./arm64
-          if-no-files-found: warn
-
   release:
     name: Create GitHub Release (only on tag)
     needs: build
@@ -80,13 +73,6 @@ jobs:
         with:
           name: amd64
           path: ./artifacts/amd64
-
-      - name: Download arm64 artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: arm64
-          path: ./artifacts/arm64
-          # if arm64 wasn't built, this will warn but workflow continues
 
       # --- New explicit existence checks (use GITHUB_OUTPUT) ---
  
