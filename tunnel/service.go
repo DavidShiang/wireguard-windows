@@ -221,6 +221,12 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 
 	changes <- svc.Status{State: serviceState, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 
+	// 20260531: 增加远端超时重连功能。
+	// ================= [新增代码：看门狗初始化] =================
+	handshakeTicker := time.NewTicker(1 * time.Minute)
+	defer handshakeTicker.Stop()
+	var runningStartTime time.Time
+	// ==========================================================
 	var started bool
 	for {
 		select {
@@ -239,10 +245,75 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 				changes <- svc.Status{State: serviceState, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 				log.Println("Startup complete")
 				started = true
+
+				// 20260531: 增加远端超时重连功能。
+				// ================= [新增代码：记录启动时间] =================
+				runningStartTime = time.Now()
+				// ==========================================================
 			}
 		case e := <-watcher.errors:
 			serviceError, err = e.serviceError, e.err
 			return
+
+		// 20260531: 增加远端超时重连功能。
+		// ================= [新增代码：看门狗状态轮询与重连核心逻辑] =================
+		case <-handshakeTicker.C:
+			// 如果隧道还没有完全进入 Running 状态，跳过检查
+			if !started {
+				continue
+			}
+
+			// 1. 向驱动层索取当前的接口状态 (返回 *driver.Interface)
+			iface, err := adapter.Configuration()
+			if err != nil {
+				log.Printf("Watchdog: Failed to get adapter configuration: %v", err)
+				continue
+			}
+
+			needsReconfig := false
+			var p *driver.Peer
+
+			// 2. 遍历底层的 Peer 状态
+			for i := uint32(0); i < iface.PeerCount; i++ {
+				if p == nil {
+					p = iface.FirstPeer()
+				} else {
+					p = p.NextPeer()
+				}
+
+				// 情况 A：从未成功握手过
+				if p.LastHandshake == 0 {
+					if time.Since(runningStartTime) > 3*time.Minute {
+						log.Printf("Watchdog: No initial handshake for over 3 minutes. Triggering re-configuration.")
+						needsReconfig = true
+						break
+					}
+				} else {
+					// 情况 B：曾经握手过。
+					// 【关键】：避免 float64，使用纯整数纳秒转换 (FILETIME 转 Unix 纳秒)
+					// p.LastHandshake 是 uint64。减去 1970 年的偏移量，再乘以 100 得到纳秒
+					unixNano := int64(p.LastHandshake-116444736000000000) * 100
+					handshakeTime := time.Unix(0, unixNano)
+
+					// 检查距离上次握手是否超过 3 分钟
+					if time.Since(handshakeTime) > 3*time.Minute {
+						log.Printf("Watchdog: Handshake timed out (>3 mins). Last handshake: %v. Triggering re-configuration.", handshakeTime.Format(time.RFC3339))
+						needsReconfig = true
+						break
+					}
+				}
+			}
+
+			// 3. 执行平滑重配置
+			if needsReconfig {
+				log.Println("Watchdog: Re-applying interface configuration to refresh connection/DNS")
+				// 重新下发配置，此操作内部会重新解析 DNS 并重置驱动层 Peer 的握手状态机
+				err = adapter.SetConfiguration(config.ToDriverConfiguration())
+				if err != nil {
+					log.Printf("Watchdog: Failed to re-apply configuration: %v", err)
+				}
+			}
+			// =========================================================================
 		}
 	}
 }
