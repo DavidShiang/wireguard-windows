@@ -5,17 +5,17 @@ on:
     tags:
       - 'v*.*.*'
     branches:
-      - main
+      - master
   pull_request:
     branches:
-      - main
+      - master
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Keep build job permissions minimal; release job will require write permission to contents.
+# 保持全局只读权限，在具体的 Release Job 中再赋予写权限
 permissions:
   contents: read
 
@@ -29,15 +29,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.20.14'
+          go-version: '1.25.3'
+          cache: false # 禁用 v5 默认缓存，使用下面自定义的 cache 逻辑以保持你的习惯
 
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
-          path: |
-            ~\go\pkg\mod
+          path: ~\go\pkg\mod
           key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-mod-
@@ -48,21 +48,26 @@ jobs:
       - name: Build All Architectures
         run: .\build.bat build
 
-      - name: List built files
-        run: |
-          dir .\amd64 || echo "amd64 directory not found"
-          
-      - name: Upload artifacts for debugging / CI
+      - name: Upload amd64 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: amd64
-          path: ./amd64
+          name: build-amd64
+          path: ./amd64/
+          retention-days: 7 # 调试产物只保留7天，节省空间
+          
+      # 如果你需要上传其他架构，取消下方注释即可：
+      # - name: Upload arm64 artifacts
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: build-arm64
+      #     path: ./arm64/
  
   release:
-    name: Create GitHub Release (only on tag)
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    # if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # 【关键修复】：仅在推送 Tag 时触发 Release 环节，避免 PR 和普通 Push 报错
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
@@ -70,40 +75,17 @@ jobs:
       - name: Download amd64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: amd64
+          name: build-amd64
           path: ./artifacts/amd64
 
-      - name: Create release
-        id: create_release
-        uses: actions/create-release@v1.1.4
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release and Upload Assets
+        # 【关键升级】：替换已废弃的 actions/create-release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
-
-      - name: Upload amd64 release assets
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/amd64/wireguard.exe
-          asset_name: wireguard-amd64.exe
-          asset_content_type: application/octet-stream
-
-      - name: Upload amd64 wg.exe
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./artifacts/amd64/wg.exe
-          asset_name: wg-amd64.exe
-          asset_content_type: application/octet-stream
-
- 
-# Helper expression functions are not native — to avoid breaking on missing files we used download-artifact with warnings and conditional uploads.
-# If you prefer stricter checks or dynamic enumerations of files to upload, replace the conditional steps with a short shell script that enumerates and uploads using the GitHub REST API or `gh` cli.
+          files: |
+            ./artifacts/amd64/wireguard.exe
+            ./artifacts/amd64/wg.exe
