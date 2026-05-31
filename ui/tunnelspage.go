@@ -14,6 +14,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"strconv"
+	"time"
+	"os/exec"
 
 	"github.com/lxn/walk"
 
@@ -34,6 +37,11 @@ type TunnelsPage struct {
 
 	fillerContainer        *walk.Composite
 	currentTunnelContainer *walk.Composite
+
+	// 20260531：新增字段，远端断连后重新尝试连接。
+    autoReconnectEnabled bool
+    lastReconnectTime    time.Time
+    stopMonitor          chan bool
 }
 
 func NewTunnelsPage() (*TunnelsPage, error) {
@@ -117,6 +125,8 @@ func NewTunnelsPage() (*TunnelsPage, error) {
 	tp.listView.CurrentIndexChanged().Attach(tp.updateConfView)
 	tp.listView.Load(false)
 	tp.onTunnelsChanged()
+	// 20260531：启动自动重连监控
+	tp.startAutoReconnectMonitor()
 
 	return tp, nil
 }
@@ -607,4 +617,137 @@ func (tp *TunnelsPage) onSelectedTunnelsChanged() {
 		tp.fillerButton.SetText(l18n.Sprintf("Delete %d tunnels", tunnelCount))
 		tp.fillerHandler = tp.onDelete
 	}
+}
+
+// 20260531：以下函数用于断后重连。
+// 启动自动重连监控
+func (tp *TunnelsPage) startAutoReconnectMonitor() {
+    tp.autoReconnectEnabled = true
+    tp.stopMonitor = make(chan bool)
+    
+    ticker := time.NewTicker(30 * time.Second)
+    go func() {
+        for {
+            select {
+            case <-tp.stopMonitor:
+                ticker.Stop()
+                return
+            case <-ticker.C:
+                if tp.autoReconnectEnabled {
+                    tp.checkAndReconnect()
+                }
+            }
+        }
+    }()
+}
+
+// 检查并触发重连
+func (tp *TunnelsPage) checkAndReconnect() {
+    // 获取当前选中的隧道（或第一个运行的隧道）
+    currentTunnel := tp.listView.CurrentTunnel()
+    if currentTunnel == nil {
+        return
+    }
+    
+    // 获取隧道状态
+    state, err := currentTunnel.State()
+    if err != nil || state != manager.TunnelStarted {
+        return
+    }
+    
+    // 获取握手时间
+    handshakeTime, err := tp.getHandshakeTime(currentTunnel)
+    if err != nil || handshakeTime.IsZero() {
+        return
+    }
+    
+    // 如果超过2分钟没有握手，触发重连
+    if time.Since(handshakeTime) > 2*time.Minute {
+        // 冷却检查：避免刚重连完立即又重连
+        if time.Since(tp.lastReconnectTime) < 30*time.Second {
+            return
+        }
+        
+        fmt.Printf("[AutoReconnect] Handshake timeout: %v ago, reconnecting %s...\n", 
+            time.Since(handshakeTime), currentTunnel.Name)
+        
+        tp.lastReconnectTime = time.Now()
+        
+        // 在UI线程中执行重连
+        tp.Synchronize(func() {
+            tp.reconnectTunnel(currentTunnel)
+        })
+    }
+}
+
+// 获取握手时间
+func (tp *TunnelsPage) getHandshakeTime(tunnel manager.Tunnel) (time.Time, error) {
+    // 方法1：通过 tunnel 接口获取（需要在 manager 包中添加）
+    // 如果 manager.Tunnel 有 LastHandshakeTime 方法
+    if tunnelWithHandshake, ok := interface{}(tunnel).(interface{ LastHandshakeTime() (time.Time, error) }); ok {
+        return tunnelWithHandshake.LastHandshakeTime()
+    }
+    
+    // 方法2：通过 wg show 命令
+    cmd := exec.Command("wg", "show", tunnel.Name, "latest-handshakes")
+    output, err := cmd.Output()
+    if err != nil {
+        return time.Time{}, err
+    }
+    
+    // 解析输出，格式如：
+    // peer: <public_key>  <timestamp>
+    lines := strings.Split(string(output), "\n")
+    var latestTime int64
+    for _, line := range lines {
+        fields := strings.Fields(line)
+        if len(fields) >= 2 && fields[0] != "peer" {
+            if timestamp, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+                if timestamp > latestTime {
+                    latestTime = timestamp
+                }
+            }
+        }
+    }
+    
+    if latestTime > 0 {
+        return time.Unix(latestTime, 0), nil
+    }
+    
+    return time.Time{}, fmt.Errorf("no handshake time found")
+}
+
+// 重连隧道
+func (tp *TunnelsPage) reconnectTunnel(tunnel manager.Tunnel) {
+    // 先停止隧道
+    if err := tunnel.Stop(); err != nil {
+        fmt.Printf("[AutoReconnect] Failed to stop tunnel: %v\n", err)
+        return
+    }
+    
+    // 等待2秒确保完全停止
+    time.Sleep(2 * time.Second)
+    
+    // 启动隧道
+    if err := tunnel.Start(); err != nil {
+        fmt.Printf("[AutoReconnect] Failed to start tunnel: %v\n", err)
+        // 显示通知（可选）
+        walk.MsgBox(tp.Form(), "WireGuard Auto-Reconnect", 
+            fmt.Sprintf("Failed to reconnect tunnel: %v", err), walk.MsgBoxIconWarning)
+        return
+    }
+    
+    fmt.Printf("[AutoReconnect] Successfully reconnected tunnel: %s\n", tunnel.Name)
+    
+    // 显示成功通知
+    walk.MsgBox(tp.Form(), "WireGuard Auto-Reconnected", 
+        fmt.Sprintf("Tunnel '%s' has been reconnected", tunnel.Name), walk.MsgBoxIconInformation)
+}
+
+// 停止自动重连监控
+func (tp *TunnelsPage) stopAutoReconnectMonitor() {
+    if tp.stopMonitor != nil {
+        close(tp.stopMonitor)
+        tp.stopMonitor = nil
+    }
 }
