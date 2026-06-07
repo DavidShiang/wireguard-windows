@@ -1,3 +1,8 @@
+a patch for WireGuard Dynamic Endpoint: Auto DNS Re-resolve After IP Change (No Scripts). 
+官方没提供，脚本不优雅，补充了远端IP地址变化后，自动DDNS重连的功能。
+
+---
+
 # [WireGuard](https://www.wireguard.com/) for Windows
 
 This is a fully-featured WireGuard client for Windows that uses [WireGuardNT](https://git.zx2c4.com/wireguard-nt/about/). It is the only official and recommended way of using WireGuard on Windows.
