@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: DavidShiang/davidshiang-metrics-data
-          token: ${{ secrets.DEEPSEEK2MD_STATS }}
+          token: ${{ secrets.WIREGUARD_WINDOWS_STATS }}
           path: data-repo
 
       - name: Setup Python
@@ -33,7 +33,7 @@ jobs:
 
       - name: Fetch and Update Data
         env:
-          GH_TOKEN: ${{ secrets.DEEPSEEK2MD_STATS }}
+          GH_TOKEN: ${{ secrets.WIREGUARD_WINDOWS_STATS }}
         run: |
           REPO="DavidShiang/wireguard-windows"
           DATE=$(date +%Y-%m-%d)
