@@ -24,6 +24,8 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
+const filetimeToUnixOffset uint64 = 116444736000000000 // 100纳秒单位
+
 type tunnelService struct {
 	Path string
 }
@@ -221,12 +223,18 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 
 	changes <- svc.Status{State: serviceState, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 
-	// 20260531: 增加远端超时重连功能。
+	//【20260531】增加远端节点超时重连功能。
 	// ================= [新增代码：看门狗初始化] =================
 	handshakeTicker := time.NewTicker(1 * time.Minute)
 	defer handshakeTicker.Stop()
 	var runningStartTime time.Time
+
+	// 防抖与容灾状态变量
+	var lastReconfigTime time.Time
+	var reconfigFailCount int
+	const reconfigIntervalLimit = 3 * time.Minute
 	// ==========================================================
+
 	var started bool
 	for {
 		select {
@@ -245,8 +253,7 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 				changes <- svc.Status{State: serviceState, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 				log.Println("Startup complete")
 				started = true
-
-				// 20260531: 增加远端超时重连功能。
+				//【20260531】
 				// ================= [新增代码：记录启动时间] =================
 				runningStartTime = time.Now()
 				// ==========================================================
@@ -255,11 +262,16 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 			serviceError, err = e.serviceError, e.err
 			return
 
-		// 20260531: 增加远端超时重连功能。
+		//【20260531】
 		// ================= [新增代码：看门狗状态轮询与重连核心逻辑] =================
 		case <-handshakeTicker.C:
 			// 如果隧道还没有完全进入 Running 状态，跳过检查
 			if !started {
+				continue
+			}
+
+			// 【20260613】：防抖验证，距离上一次重置操作不足 3 分钟时，忽略本次检查，防止死循环
+			if !lastReconfigTime.IsZero() && time.Since(lastReconfigTime) < reconfigIntervalLimit {
 				continue
 			}
 
@@ -271,46 +283,87 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 			}
 
 			needsReconfig := false
-			var p *driver.Peer
 
 			// 2. 遍历底层的 Peer 状态
+			// 【20260613】：将初始化提至循环外，防止逻辑误判
+			p := iface.FirstPeer()
 			for i := uint32(0); i < iface.PeerCount; i++ {
 				if p == nil {
-					p = iface.FirstPeer()
-				} else {
-					p = p.NextPeer()
+					log.Printf("Watchdog: Encountered nil peer at index %d, aborting traversal", i)
+					break
 				}
 
 				// 情况 A：从未成功握手过
 				if p.LastHandshake == 0 {
 					if time.Since(runningStartTime) > 3*time.Minute {
-						log.Printf("Watchdog: No initial handshake for over 3 minutes. Triggering re-configuration.")
+						log.Printf("Watchdog: No initial handshake for peer %d over 3 minutes. Triggering re-configuration.", i)
 						needsReconfig = true
 						break
 					}
 				} else {
 					// 情况 B：曾经握手过。
-					// 【关键】：避免 float64，使用纯整数纳秒转换 (FILETIME 转 Unix 纳秒)
-					// p.LastHandshake 是 uint64。减去 1970 年的偏移量，再乘以 100 得到纳秒
-					unixNano := int64(p.LastHandshake-116444736000000000) * 100
+					if p.LastHandshake < filetimeToUnixOffset {
+						log.Printf("Watchdog: Invalid LastHandshake value (%d) for peer %d", p.LastHandshake, i)
+						continue
+					}
+
+					unixNano := int64(p.LastHandshake-filetimeToUnixOffset) * 100
 					handshakeTime := time.Unix(0, unixNano)
 
 					// 检查距离上次握手是否超过 3 分钟
 					if time.Since(handshakeTime) > 3*time.Minute {
-						log.Printf("Watchdog: Handshake timed out (>3 mins). Last handshake: %v. Triggering re-configuration.", handshakeTime.Format(time.RFC3339))
+						log.Printf("Watchdog: Handshake timed out (>3 mins) for peer %d. Last: %v", i, handshakeTime.Format(time.RFC3339))
 						needsReconfig = true
 						break
 					}
 				}
+				// 步进至下一个节点
+				p = p.NextPeer()
 			}
 
 			// 3. 执行平滑重配置
 			if needsReconfig {
-				log.Println("Watchdog: Re-applying interface configuration to refresh connection/DNS")
-				// 重新下发配置，此操作内部会重新解析 DNS 并重置驱动层 Peer 的握手状态机
-				err = adapter.SetConfiguration(config.ToDriverConfiguration())
-				if err != nil {
-					log.Printf("Watchdog: Failed to re-apply configuration: %v", err)
+				log.Println("Watchdog: Triggering connection recovery process...")
+
+				// 【20260613】：重新从磁盘加载配置，捕获运行期间通过 GUI 产生的更改
+				newConfig, loadErr := conf.LoadFromPath(service.Path)
+				if loadErr != nil {
+					log.Printf("Watchdog: Failed to reload configuration from disk: %v", loadErr)
+					continue
+				}
+				newConfig.DeduplicateNetworkEntries()
+
+				// 【20260613】：基于新配置重新解析 DNS（解决 DDNS 导致 IP 变更的问题）
+				log.Println("Watchdog: Re-resolving endpoints")
+				if dnsErr := newConfig.ResolveEndpoints(); dnsErr != nil {
+					log.Printf("Watchdog: Failed to resolve endpoints: %v", dnsErr)
+					// 如果 DNS 解析失败，跳过本次重试，等待下一分钟
+					continue
+				}
+
+				// 将新的配置对象替换为全局使用的配置
+				config = newConfig
+
+				// 【20260531】：下发配置。
+				// 注：WireGuardNT 驱动处理 SetConfiguration 时使用基于公钥的 Diff 逻辑。
+				// 它会静默更新 IP 变更或新增的节点，不会影响配置未改变的正常活跃节点，达到“无感重连”。
+				log.Println("Watchdog: Applying updated configuration to driver to recover peer connection...")
+				applyErr := adapter.SetConfiguration(config.ToDriverConfiguration())
+				if applyErr != nil {
+					reconfigFailCount++
+					log.Printf("Watchdog: Failed to apply configuration (Attempt %d/3): %v", reconfigFailCount, applyErr)
+
+					// 故障熔断：连续失败3次，触发服务异常退出，交由 Windows SCM 自动重启服务
+					// if reconfigFailCount >= 3 {
+					// 	log.Println("Watchdog: Critical failure. Triggering service termination for SCM recovery.")
+					// 	err = applyErr
+					// 	serviceError = services.ErrorDeviceSetConfig
+					// 	return // 退出 Execute 函数，触发 defer 销毁网卡
+				} else {
+					// 成功后重置计数器和防抖时间戳
+					reconfigFailCount = 0
+					lastReconfigTime = time.Now()
+					log.Println("Watchdog: Recovery configuration applied successfully")
 				}
 			}
 			// =========================================================================
