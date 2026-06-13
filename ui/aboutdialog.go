@@ -129,7 +129,7 @@ func runAboutDialog(owner walk.Form) error {
 		return err
 	}
 	donatePB.SetAlignment(walk.AlignHCenterVNear)
-	donatePB.SetText(l18n.Sprintf("♥ &Donate!"))
+	donatePB.SetText(l18n.Sprintf(">> &Donate!"))
 	donatePB.Clicked().Attach(func() {
 		if easterEggIndex == -1 {
 			easterEggIndex = 0

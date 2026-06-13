@@ -41,16 +41,16 @@ if exist .deps\prepared goto :render
 		echo [+] Regenerating files
 		go generate ./... || exit /b 1
 	)
-	call :build_plat x86 i686 386 || goto :error
+	rem call :build_plat x86 i686 386 || goto :error
 	call :build_plat amd64 x86_64 amd64 || goto :error
-	call :build_plat arm64 aarch64 arm64 || goto :error
+	rem call :build_plat arm64 aarch64 arm64 || goto :error
 
 :sign
 	if exist .\sign.bat call .\sign.bat
 	if "%SigningProvider%"=="" goto :success
 	if "%TimestampServer%"=="" goto :success
 	echo [+] Signing
-	signtool sign %SigningProvider% /fd sha256 /tr "%TimestampServer%" /td sha256 /d WireGuard x86\wireguard.exe x86\wg.exe amd64\wireguard.exe amd64\wg.exe arm64\wireguard.exe arm64\wg.exe || goto :error
+	signtool sign %SigningProvider% /fd sha256 /tr "%TimestampServer%" /td sha256 /d WireGuard amd64\wireguard.exe amd64\wg.exe || goto :error
 
 :success
 	echo [+] Success. Launch wireguard.exe.

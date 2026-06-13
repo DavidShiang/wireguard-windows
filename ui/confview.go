@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	//"fmt"
 
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
@@ -16,6 +17,7 @@ import (
 	"golang.zx2c4.com/wireguard/windows/conf"
 	"golang.zx2c4.com/wireguard/windows/l18n"
 	"golang.zx2c4.com/wireguard/windows/manager"
+	//"golang.zx2c4.com/wireguard/windows/ringlogger"
 )
 
 type widgetsLine interface {
@@ -582,7 +584,10 @@ func NewConfView(parent walk.Container) (*ConfView, error) {
 			}
 		}
 	}()
-
+	
+    // 20250824
+	// 增加超时监控
+	cv.startHandshakeMonitor()
 	disposables.Spare()
 
 	return cv, nil
@@ -736,4 +741,61 @@ func (cv *ConfView) setTunnel(tunnel *manager.Tunnel, config *conf.Config, state
 		groupBox.Parent().Children().Remove(groupBox)
 		groupBox.Dispose()
 	}
+}
+// 20252824
+// 增加超时重新连接的时间监控
+func (cv *ConfView) startHandshakeMonitor() {
+    go func() {
+        for {
+            time.Sleep(1 * time.Minute)
+            cv.Synchronize(func() {
+                if cv.tunnel == nil {
+                    return
+                }
+                // 遍历所有 peer，查找最大 last handshake
+                maxElapsed := time.Duration(0)
+                for _, pv := range cv.peers {
+                    hsText := pv.latestHandshake.text.Text()
+                    elapsed := parseHandshakeElapsed(hsText)
+                    if elapsed > maxElapsed {
+                        maxElapsed = elapsed
+                    }
+                }
+                if maxElapsed > 2*time.Minute {
+                    // 断开
+                    if cv.interfaze != nil && cv.interfaze.toggleActive != nil {
+						cv.interfaze.toggleActive.button.SetEnabled(true)
+						cv.onToggleActiveClicked() // 直接调用点击事件
+                        time.Sleep(2 * time.Second)
+                        // 重新连接
+  						cv.onToggleActiveClicked() // 再次调用以重连
+                    }
+                }
+            })
+        }
+    }()
+}
+
+// 辅助函数，将“上次握手”文本转为持续时间
+func parseHandshakeElapsed(text string) time.Duration {
+    // 例如 text = "3 minutes ago"
+    if text == "" || strings.Contains(text, "never") {
+		return 0
+	}
+	if strings.Contains(text, "just now") || strings.Contains(text, "now") {
+		return 1 * time.Second
+	}
+	if strings.Contains(text, "hour") || strings.Contains(text, "小时") {
+		n, _ := strconv.Atoi(strings.Fields(text)[0])
+		return time.Duration(n) * time.Hour
+	}
+	if strings.Contains(text, "minute") || strings.Contains(text, "分钟") {
+		n, _ := strconv.Atoi(strings.Fields(text)[0])
+		return time.Duration(n) * time.Minute
+	}
+	if strings.Contains(text, "second") || strings.Contains(text, "秒") {
+		return 10 * time.Second // 约等
+	}
+
+	return 0 //默认不超时
 }
