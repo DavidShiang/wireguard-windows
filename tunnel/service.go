@@ -230,9 +230,9 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 	var runningStartTime time.Time
 
 	// 防抖与容灾状态变量
-	var lastReconfigTime time.Time
-	var reconfigFailCount int
-	const reconfigIntervalLimit = 3 * time.Minute
+	var lastRecoveryAttempt time.Time
+	var consecutiveFailures int                 // 连续失败/超时的次数
+	const maxBackoffInterval = 30 * time.Minute // 最大退避上限
 	// ==========================================================
 
 	var started bool
@@ -270,8 +270,28 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 				continue
 			}
 
+			// 1. 计算当前的动态退避延迟 (Exponential Backoff)
+			// 公式: base_interval * (2 ^ consecutiveFailures)
+			// 失败 0次: 3分钟后可查; 失败 1次: 4分钟; 失败 2次: 8分钟... 以此类推
+			var currentBackoff time.Duration
+			if consecutiveFailures == 0 {
+				currentBackoff = 3 * time.Minute // 正常防抖间隔
+			} else {
+				// 指数递增，左移位实现 2 的 n 次方 (注意限制最大位移防止溢出)
+				shift := consecutiveFailures - 1
+				if shift > 10 {
+					shift = 10
+				}
+				currentBackoff = time.Duration(1<<shift) * 2 * time.Minute
+			}
+
+			// 限制最大退避时长，防止永久失联
+			if currentBackoff > maxBackoffInterval {
+				currentBackoff = maxBackoffInterval
+			}
+
 			// 【20260613】：防抖验证，距离上一次重置操作不足 3 分钟时，忽略本次检查，防止死循环
-			if !lastReconfigTime.IsZero() && time.Since(lastReconfigTime) < reconfigIntervalLimit {
+			if !lastRecoveryAttempt.IsZero() && time.Since(lastRecoveryAttempt) < currentBackoff {
 				continue
 			}
 
@@ -350,21 +370,28 @@ func (service *tunnelService) Execute(args []string, r <-chan svc.ChangeRequest,
 				log.Println("Watchdog: Applying updated configuration to driver to recover peer connection...")
 				applyErr := adapter.SetConfiguration(config.ToDriverConfiguration())
 				if applyErr != nil {
-					reconfigFailCount++
-					log.Printf("Watchdog: Failed to apply configuration (Attempt %d/3): %v", reconfigFailCount, applyErr)
+					consecutiveFailures++
+					log.Printf("Watchdog: Failed to apply configuration (Attempt %d/3): %v", consecutiveFailures, applyErr)
 
-					// 故障熔断：连续失败3次，触发服务异常退出，交由 Windows SCM 自动重启服务
-					// if reconfigFailCount >= 3 {
-					// 	log.Println("Watchdog: Critical failure. Triggering service termination for SCM recovery.")
+					// 严重故障依然保留熔断机制（可选，如果你希望它无限退避重试，可以去掉这段）
+					// if consecutiveFailures >= 10 {
+					// 	log.Println("Watchdog: Critical failure limit reached. Terminating service for SCM recovery.")
 					// 	err = applyErr
 					// 	serviceError = services.ErrorDeviceSetConfig
-					// 	return // 退出 Execute 函数，触发 defer 销毁网卡
+					// 	return
+					// }
 				} else {
 					// 成功后重置计数器和防抖时间戳
-					reconfigFailCount = 0
-					lastReconfigTime = time.Now()
+					consecutiveFailures = 0
+					lastRecoveryAttempt = time.Now()
 					log.Println("Watchdog: Recovery configuration applied successfully")
 				}
+			} else {
+				// 【20260613】：如果检测到所有节点正常活跃，也重置退避计数器（意味着网络已经自我恢复）
+				if consecutiveFailures > 0 {
+					log.Println("Watchdog: Connection healthy, resetting failure counter")
+				}
+				consecutiveFailures = 0
 			}
 			// =========================================================================
 		}
